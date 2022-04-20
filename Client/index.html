@@ -1,0 +1,237 @@
+<html>
+	<head>
+		<title>Notebook</title>
+		<style>
+            .cell, .code, .markdown, .outputs {
+                display: block;
+                min-height: 16px;
+                width: 100%;
+                border: 1px solid black;
+                border-radius: 2px;
+            }
+            .cell {
+                text-align: right;
+            }
+            .code, .markdown, .outputs {
+                text-align: left;
+            }
+            .separator {
+                text-align: center;
+            }
+		</style>
+	</head>
+	<body>
+        <div id="notebook">
+            
+
+        </div>
+		<script>
+            data = {"cells": []}
+            session = {"local": true, "params": null, "data": null};
+            id = t => document.getElementById(t);
+            function get_cells() {
+                return document.getElementsByClassName("cell");
+            }
+
+            function get_separators() {
+                return document.getElementsByClassName("separator");
+            }
+
+            function create_separator(index) {
+                let div = document.createElement("div");
+                div.className = "separator";
+                div.dataset.linkage = index;
+                let btn1 = document.createElement("button");
+                btn1.innerText = "Add Code";
+                btn1.onclick = add_code_from_separator;
+                div.appendChild(btn1);
+                let btn2 = document.createElement("button");
+                btn2.innerText = "Add Text";
+                btn2.onclick = add_text_from_separator;
+                div.appendChild(btn2);
+                return div;
+            }
+
+            function renumber(index) {
+                let cells = get_cells();
+                let separators = get_separators();
+				for (let i = index + 1; i < data.cells.length; ++i){
+					cells[i].dataset.linkage = i;
+					separators[i].dataset.linkage = i;
+				}
+				separators[separators.length - 1].dataset.linkage = separators.length - 1;
+            }
+
+            function update_source(evt) {
+                let index = get_id(evt.target);
+                data.cells[index].source = this.innerText;
+            }
+
+            function add_before(index, cell, dict) {
+                let separator = create_separator(index);
+                if (index < data.cells.length) {
+                    id("notebook").insertBefore(separator, get_cells()[index]);
+                } else {
+                    id("notebook").appendChild(separator);
+                }
+				id("notebook").insertBefore(cell, separator);
+                data.cells.splice(index, 0, dict);
+                renumber(index);
+            }
+
+            function add_code_from_separator() {
+                add_code(get_id(this));
+            }
+
+            function add_text_from_separator() {
+                add_text(get_id(this));
+            }
+
+            function get_id(element) {
+                while (element !== null) {
+                    if (element.dataset.linkage !== undefined) {
+                        return +element.dataset.linkage;
+                    }
+                    element = element.parentElement;
+                }
+                return null;
+            }
+
+            function play_cell() {
+                let index = get_id(this);
+                let content = data.cells[index].source;
+                let payload = {
+                    "local": session.local,
+                    "params": session.params,
+                    "data": session.data,
+                    "code": content,
+                };
+
+                fetch("http://localhost:8000/", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                }).then(
+                    response => response.json()
+                ).then(raw => {
+                    /*
+                        Sample:
+                        {
+                            "status": true,
+                            "data": {
+                                "params": {},
+                                "outputs": [{
+                                    "output_type": "stream",
+                                    "name": "",
+                                    "text": ""
+                                }],
+                                "data": null
+                            }
+                        }
+                    */
+                    if (raw.status) {
+                        return_data = raw.data;
+                        data.cells[index].outputs = return_data.outputs;
+                        session.params = return_data.params;
+                        if (session.local) {
+                            session.data = return_data.data;
+                        }
+                        display_outputs(index, return_data.outputs);
+                    } else {
+                        console.error("Error!");
+                        console.error(response);
+                    }
+                }).catch(error => {
+                    console.error("Error!");
+                })
+            }
+
+            function display_outputs(index, content) {
+                let target = get_cells()[index].getElementsByClassName("outputs")[0];
+                target.innerText = ""; // clear
+                for (let i = 0; i < content.length; ++i) {
+                    switch (content[i].output_type) {
+                        case "stream":
+                            let div = document.createElement("div");
+                            div.innerText = content[i].text;
+                            target.appendChild(div);
+                            break;
+                        case "display_data":
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+
+            function remove_cell() {
+                let cells = get_cells();
+                let separators = get_separators();
+                let index = get_id(this);
+                id("notebook").removeChild(cells[index]);
+                id("notebook").removeChild(separators[index]);
+                data.cells.splice(index, 1);
+                renumber(index);
+            }
+
+            function add_wrapper(index, executable=false) {
+                let temp = document.createElement("div");
+                temp.className = "cell";
+                temp.dataset.linkage = index;
+                if (executable) {
+                    let btn_execute = document.createElement("button");
+                    btn_execute.innerHTML = "▶️";
+                    btn_execute.onclick = play_cell;
+                    temp.appendChild(btn_execute);
+                }
+                let btn_remove = document.createElement("button");
+                btn_remove.innerHTML = "🗑️";
+                btn_remove.onclick = remove_cell;
+                temp.appendChild(btn_remove);
+                return temp;
+            }
+
+            function add_code(index) {
+                let wrapper = add_wrapper(index, true);
+                let temp = document.createElement("code");
+                temp.className = "code";
+                temp.setAttribute("contenteditable", true);
+                wrapper.appendChild(temp);
+                let output_cell = document.createElement("code");
+                output_cell.className = "outputs";
+                wrapper.appendChild(output_cell);
+                let dict = {
+                    "cell_type": "code",
+                    "execution_count": null,
+                    "metadata": {
+                        "collapsed": true,
+                        "scrolled": false
+                    },
+                    "source": "",
+                    "outputs": []
+                };
+                temp.oninput = update_source;
+                add_before(index, wrapper, dict);
+            }
+
+            function add_text(index) {
+                let wrapper = add_wrapper(index);
+                let temp = document.createElement("div");
+                temp.className = "markdown";
+                temp.setAttribute("contenteditable", true);
+                wrapper.appendChild(temp);
+                let dict = {
+                    "cell_type": "markdown",
+                    "metadata": {},
+                    "source": "",
+                };
+                temp.oninput = update_source;
+                add_before(index, wrapper, dict);
+            }
+            id("notebook").appendChild(create_separator(0));
+            add_code(0);
+		</script>
+	</body>
+</html>
