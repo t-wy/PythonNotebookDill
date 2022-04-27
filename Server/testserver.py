@@ -7,23 +7,32 @@ class MyReader():
         self.buffer = b""
     def read(self, size=-1):
         if size < 0:
-            return self.buffer + self.reader.read()
+            return self.buffer + self.reader.peek()
         elif size == 0:
             return b""
-        elif size < len(self.buffer):
+        elif size <= len(self.buffer):
             ret = self.buffer[:size]
             self.buffer = self.buffer[size:]
             return ret
         else:
             ret = self.buffer
-            self.buffer = ""
+            self.buffer = b""
             return ret + self.reader.read(size - len(ret))
+    def peek(self, size=-1):
+        if size < 0:
+            return self.buffer + self.reader.peek()
+        elif size == 0:
+            return b""
+        elif size <= len(self.buffer):
+            return self.buffer
+        else:
+            return self.buffer + self.reader.peek(size - len(self.buffer))
     def read_until(self, delimeter=b"\n"):
         while delimeter not in self.buffer:
             ch = self.reader.read(1)
             if ch != b"":
                 self.buffer += ch
-                print(self.buffer)
+                # print(self.buffer)
         loc = self.buffer.find(delimeter) + len(delimeter)
         ret = self.buffer[:loc]
         self.buffer = self.buffer[loc:]
@@ -81,7 +90,7 @@ class Handler(SimpleHTTPRequestHandler):
                     session_id = content["params"]["id"]
                     execution_count = content["params"]["execution_count"]
                     open("state.pkl", "wb").write(base64.b64decode(content["data"]))
-                    open("launch.py", "w").write("import dill\ndill.load_session('state.pkl')\n")
+                    open("launch.py", "w").write("import dill\n")
                     # import IPython; IPython.get_ipython().execution_count = {}\n".format(execution_count))
                 ipython_shell = subprocess.Popen(["ipython", "-i", "launch.py"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)         
                     # integer check
@@ -91,28 +100,53 @@ class Handler(SimpleHTTPRequestHandler):
                 # temp measure
                 execution_count2 = execution_count
                 execution_count = 0
-
-                temp = myreader.read_until("In [{}]: ".format(execution_count + 1).encode())
+                if content["params"] is not None:
+                    myreader.read_until("In [{}]: ".format(execution_count + 1).encode())
+                    mywriter.write(b"dill.load_session('state.pkl')\n")
+                    execution_count += 1
+                myreader.read_until("In [{}]: ".format(execution_count + 1).encode())
                 mywriter.write(b"%cpaste\n")
                 myreader.read_until(b":")
                 mywriter.write((content["code"].strip() + "\n--\n").encode())
-                myreader.read_until("Out[{}]: ".format(execution_count + 1).encode())
-                delimeter = "In [{}]: ".format(execution_count + 2).encode()
-                stdout = myreader.read_until(delimeter)[:-len(delimeter)].strip().decode()
+                while myreader.peek(1)[:1] in b":\n\r":
+                    myreader.read(1)
+                
+                delitemp1 = "Out[{}]: ".format(execution_count + 1).encode()
+                delitemp2 = "In [{}]: ".format(execution_count + 2).encode()
+                stdout = []
+                stderr = []
+                if myreader.peek(len(delitemp1))[:len(delitemp1)] == delitemp1:
+                    delitemp = "Out[{}]: ".format(execution_count + 1).encode()
+                    myreader.read_until(delitemp)
+                    # TODO: stream output
+                    stdout.append(myreader.read_until(delitemp2)[:-len(delitemp2)].strip().decode())
+                elif myreader.peek(10)[:10] == b"----------": # Error
+                    stderr.append(myreader.read_until(delitemp2)[:-len(delitemp2)].strip().decode())
+                else: # Print?
+                    stdout.append(myreader.read_until(delitemp2)[:-len(delitemp2)].strip().decode())
                 mywriter.write(b"dill.dump_session('state2.pkl')\n")
                 myreader.read_until("In [{}]: ".format(execution_count + 3).encode())
                 ipython_shell.kill()
 
                 # temp measure
                 execution_count = execution_count2
+
+                outputs = []
+                for s in stdout:
+                    outputs.append({
+                        "output_type": "stream",
+                        "name": "stdout",
+                        "text": s
+                    })
+                for s in stderr:
+                    outputs.append({
+                        "output_type": "error",
+                        "text": s
+                    })
                 # Return
                 output = {
                     "params": {"id": session_id, "execution_count": execution_count + 1},
-                    "outputs": [{
-                        "output_type": "stream",
-                        "name": "stdout",
-                        "text": stdout
-                    }],
+                    "outputs": outputs,
                     "data": base64.b64encode(open("state2.pkl", "rb").read()).decode()
                 }
                 response(True, output)

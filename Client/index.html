@@ -9,11 +9,16 @@
                 border: 1px solid black;
                 border-radius: 2px;
             }
+            .outputs {
+                background-color: black;
+                color: white;
+            }
             .cell {
                 text-align: right;
             }
             .code, .markdown, .outputs {
                 text-align: left;
+                word-break: break-all;
             }
             .separator {
                 text-align: center;
@@ -21,6 +26,14 @@
 		</style>
 	</head>
 	<body>
+        <script>
+            function runall() {
+				for (let i = 0; i < data.cells.length; ++i){
+					queue.push(i);
+				}
+            }
+        </script>
+        <button onclick="runall()">Run All</button>
         <div id="notebook">
             
 
@@ -96,10 +109,21 @@
                 }
                 return null;
             }
+            
+            queue = [];
+            finished = true;
 
             function play_cell() {
                 let index = get_id(this);
-                let content = data.cells[index].source;
+                queue.push(index);
+            }
+
+            function process_cell() {
+                let index = queue.shift();
+                let target_dom = get_cells()[index];
+                let target_entry = data.cells[index]; // prevent later modification
+                target_dom.style.backgroundColor = "gray";
+                let content = target_entry.source;
                 let payload = {
                     "local": session.local,
                     "params": session.params,
@@ -113,6 +137,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify(payload)
+                    // TODO: stream output
                 }).then(
                     response => response.json()
                 ).then(raw => {
@@ -133,20 +158,32 @@
                     */
                     if (raw.status) {
                         return_data = raw.data;
-                        data.cells[index].outputs = return_data.outputs;
+                        target_entry.outputs = return_data.outputs;
                         session.params = return_data.params;
                         if (session.local) {
                             session.data = return_data.data;
                         }
-                        display_outputs(index, return_data.outputs);
+                        display_outputs(get_id(target_dom), return_data.outputs);
                     } else {
                         console.error("Error!");
                         console.error(response);
                     }
                 }).catch(error => {
                     console.error("Error!");
+                }).finally(_ => {
+                    target_dom.style.backgroundColor = "";
+                    finished = true;
                 })
             }
+
+            function pre_process_cell() {
+                if (finished && queue.length) {
+                    finished = false;
+                    process_cell();
+                }
+            }
+
+            setInterval(pre_process_cell, 100);
 
             function display_outputs(index, content) {
                 let target = get_cells()[index].getElementsByClassName("outputs")[0];
@@ -154,10 +191,21 @@
                 for (let i = 0; i < content.length; ++i) {
                     switch (content[i].output_type) {
                         case "stream":
-                            let div = document.createElement("div");
-                            div.innerText = content[i].text;
-                            target.appendChild(div);
-                            break;
+                            
+                            {
+                                let div = document.createElement("div");
+                                div.innerText = content[i].text;
+                                target.appendChild(div);
+                                break;
+                            }
+                        case "error":
+                            {
+                                let div = document.createElement("div");
+                                div.innerText = content[i].text;
+                                div.style.backgroundColor = "darkred";
+                                target.appendChild(div);
+                                break;
+                            }
                         case "display_data":
                             break;
                         default:
@@ -167,6 +215,7 @@
             }
 
             function remove_cell() {
+                queue = []; // since it may break the order
                 let cells = get_cells();
                 let separators = get_separators();
                 let index = get_id(this);
@@ -197,7 +246,7 @@
                 let wrapper = add_wrapper(index, true);
                 let temp = document.createElement("code");
                 temp.className = "code";
-                temp.setAttribute("contenteditable", true);
+                temp.setAttribute("contenteditable", "plaintext-only");
                 wrapper.appendChild(temp);
                 let output_cell = document.createElement("code");
                 output_cell.className = "outputs";
@@ -220,7 +269,7 @@
                 let wrapper = add_wrapper(index);
                 let temp = document.createElement("div");
                 temp.className = "markdown";
-                temp.setAttribute("contenteditable", true);
+                temp.setAttribute("contenteditable", "plaintext-only");
                 wrapper.appendChild(temp);
                 let dict = {
                     "cell_type": "markdown",
